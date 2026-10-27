@@ -1,0 +1,23 @@
+# shellcheck shell=bash
+# ---------------- Tooling ----------------
+# The PHP app ships inside this user data (base64), so servers need no Git access.
+
+mkdir -p /var/www/html
+echo '${index_php_b64}' | base64 -d > /var/www/html/index.php
+echo '${schema_sql_b64}' | base64 -d > /root/tooling-schema.sql
+
+# Create the database and seed rows. Idempotent: safe on every boot of every server.
+for _ in $(seq 1 20); do mysql --defaults-extra-file=/root/.my.cnf < /root/tooling-schema.sql && break; sleep 15; done
+
+set +x
+mkdir -p /etc/tooling
+cat > /etc/tooling/db.php <<EOF
+<?php
+return ['host' => '$DB_HOST', 'user' => '$DB_USER', 'password' => '$DB_PASS', 'name' => 'tooling'];
+EOF
+set -x
+chown root:apache /etc/tooling/db.php
+chmod 640 /etc/tooling/db.php
+
+chown -R apache:apache /var/www/html
+systemctl enable --now php-fpm httpd

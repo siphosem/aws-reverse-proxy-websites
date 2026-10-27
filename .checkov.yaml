@@ -1,0 +1,17 @@
+# Checks skipped on purpose for this lab, each with the reason.
+skip-check:
+  - CKV_AWS_293  # RDS deletion protection: lab is destroyed after each session
+  - CKV_AWS_157  # RDS Multi-AZ: optional via db_multi_az (doubles cost)
+  - CKV2_AWS_69  # RDS TLS-only: traffic stays in isolated data subnets; next hardening step
+  - CKV_AWS_150  # ALB deletion protection: lab is destroyed after each session
+  - CKV_AWS_91   # ALB access logs: needs an extra log bucket; next hardening step
+  - CKV2_AWS_28  # WAF on the public ALB: extra cost, out of scope
+  - CKV_AWS_260  # Port 80 open on the public ALB: it only redirects to HTTPS
+  - CKV_AWS_88   # Public IPs on bastion and NGINX: the brief puts them in public subnets; SGs restrict access
+  - CKV_AWS_338  # 1-year log retention: 7 days keeps lab cost down
+  - CKV_AWS_394  # AZ data source: list is sliced to 2 AZs, so new AZs don't change it
+  - CKV_AWS_109  # KMS key policy: standard account-root statement; resource "*" means "this key"
+  - CKV_AWS_111  # Same KMS key policy statement as above
+  - CKV_AWS_356  # Same KMS key policy statement as above
+  - CKV2_AWS_38  # DNSSEC: needs registrar steps outside Terraform
+  - CKV2_AWS_39  # Route 53 query logging: extra cost, out of scope

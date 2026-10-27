@@ -1,0 +1,76 @@
+# shellcheck shell=bash
+# ---------------- WordPress ----------------
+# WordPress files live on EFS so every server in the group serves the same
+# plugins, themes and uploads. Credentials stay on local disk, never on EFS.
+
+mkdir -p /var/www/html
+echo "${efs_id}:/ /var/www/html efs _netdev,tls,accesspoint=${efs_ap_id} 0 0" >> /etc/fstab
+for _ in $(seq 1 20); do mount -a -t efs && break; sleep 10; done
+mountpoint -q /var/www/html
+
+# Per-server DB settings, read by wp-config.php. Rewritten on every boot,
+# so a rotated password is picked up by replacing instances.
+set +x
+mkdir -p /etc/wordpress
+cat > /etc/wordpress/db.php <<EOF
+<?php
+define('DB_NAME', 'wordpress');
+define('DB_USER', '$DB_USER');
+define('DB_PASSWORD', '$DB_PASS');
+define('DB_HOST', '$DB_HOST');
+EOF
+set -x
+chown root:apache /etc/wordpress/db.php
+chmod 640 /etc/wordpress/db.php
+
+# Install WordPress once. flock stops two servers booting together from both doing it.
+(
+  flock -w 600 9
+  if [ ! -f /var/www/html/wp-config.php ]; then
+    cd /tmp || exit 1
+    wget -q https://wordpress.org/latest.tar.gz
+    tar -xzf latest.tar.gz
+    cp -r wordpress/. /var/www/html/
+    rm -rf wordpress latest.tar.gz
+
+    SALTS=$(curl -fsS https://api.wordpress.org/secret-key/1.1/salt/)
+    cat > /var/www/html/wp-config.php <<EOF
+<?php
+require '/etc/wordpress/db.php';
+define('DB_CHARSET', 'utf8mb4');
+define('DB_COLLATE', '');
+$SALTS
+\$table_prefix = 'wp_';
+
+// TLS ends at the load balancer; trust its header so WordPress builds https:// links.
+if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+    \$_SERVER['HTTPS'] = 'on';
+}
+define('WP_HOME', 'https://${domain}');
+define('WP_SITEURL', 'https://${domain}');
+define('DISALLOW_FILE_EDIT', true);
+define('WP_DEBUG', false);
+
+if (!defined('ABSPATH')) {
+    define('ABSPATH', __DIR__ . '/');
+}
+require_once ABSPATH . 'wp-settings.php';
+EOF
+  fi
+) 9>/var/www/html/.install.lock
+
+cat > /etc/httpd/conf.d/wordpress.conf <<'APACHE'
+<Directory /var/www/html>
+  AllowOverride All
+  Require all granted
+</Directory>
+APACHE
+
+# WordPress also answers on www.; send it to the apex.
+cat > /etc/httpd/conf.d/www-redirect.conf <<'APACHE'
+<If "%%{HTTP_HOST} == 'www.${domain}'">
+  Redirect permanent / https://${domain}/
+</If>
+APACHE
+
+systemctl enable --now php-fpm httpd

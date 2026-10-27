@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is git-ignored.
+region      = "eu-west-1"
+company     = "ubuntu-corp"
+domain_name = "example.com"           # a domain you own
+
+# Bought the domain in Route 53? Keep false: its hosted zone already exists.
+# Bought it elsewhere? Set true, apply, then put the name_servers output at your registrar.
+create_hosted_zone = false
+
+admin_cidrs = ["203.0.113.10/32"]     # your IP: curl -s https://checkip.amazonaws.com
+alert_email = "you@example.com"       # optional: Auto Scaling notifications
+# key_name  = "my-keypair"            # optional: SSH via the bastion; SSM works without it

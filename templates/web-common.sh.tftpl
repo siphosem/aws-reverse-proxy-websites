@@ -1,0 +1,46 @@
+#!/bin/bash
+# Shared setup for the WordPress and Tooling servers: Apache + PHP + TLS,
+# a local health check, and database credentials from Secrets Manager.
+set -euxo pipefail
+
+dnf update -y
+dnf install -y httpd mod_ssl openssl php php-fpm php-mysqlnd php-gd php-mbstring php-xml \
+  php-intl php-zip amazon-efs-utils jq mariadb105 python3 vim wget telnet htop chrony
+systemctl enable --now chronyd
+
+# Self-signed certificate for the internal ALB -> Apache hop (ALB doesn't validate it).
+if [ ! -f /etc/pki/tls/private/localhost.key ]; then
+  openssl req -x509 -nodes -newkey rsa:2048 -days 825 -subj "/CN=web.internal" \
+    -keyout /etc/pki/tls/private/localhost.key -out /etc/pki/tls/certs/localhost.crt
+fi
+
+# Health check served from local disk, so it reflects this server, not EFS.
+mkdir -p /var/www/health
+echo healthy > /var/www/health/healthstatus
+cat > /etc/httpd/conf.d/00-health.conf <<'APACHE'
+Alias /healthstatus /var/www/health/healthstatus
+<Directory /var/www/health>
+  Require all granted
+</Directory>
+ServerTokens Prod
+ServerSignature Off
+APACHE
+
+# Database credentials: RDS keeps the master password in Secrets Manager.
+# Tracing is off here so the password never lands in /var/log/cloud-init-output.log.
+set +x
+SECRET=$(aws secretsmanager get-secret-value --region ${region} \
+  --secret-id '${db_secret_arn}' --query SecretString --output text)
+DB_USER=$(echo "$SECRET" | jq -r .username)
+DB_PASS=$(echo "$SECRET" | jq -r .password)
+DB_HOST='${db_host}'
+
+# Small client config so mysql commands below don't put the password on the command line.
+cat > /root/.my.cnf <<EOF
+[client]
+host=$DB_HOST
+user=$DB_USER
+password=$DB_PASS
+EOF
+chmod 600 /root/.my.cnf
+set -x

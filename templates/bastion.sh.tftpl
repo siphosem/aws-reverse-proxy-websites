@@ -1,0 +1,7 @@
+#!/bin/bash
+# Bastion: admin jump host with Ansible and Git for configuring the private servers.
+set -euxo pipefail
+
+dnf update -y
+dnf install -y ansible-core git python3 vim wget telnet htop chrony mariadb105
+systemctl enable --now chronyd

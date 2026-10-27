@@ -1,0 +1,55 @@
+#!/bin/bash
+# NGINX reverse proxy: receives HTTPS from the external ALB, forwards to the internal ALB
+# with the original Host header so the internal ALB can route WordPress vs Tooling.
+set -euxo pipefail
+
+dnf update -y
+dnf install -y nginx openssl python3 vim wget telnet htop chrony
+systemctl enable --now chronyd
+
+# The ALB doesn't validate backend certificates, so a self-signed one is enough
+# to keep the ALB -> NGINX hop encrypted. Users only ever see the ACM certificate.
+mkdir -p /etc/nginx/ssl
+openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
+  -subj "/CN=nginx.internal" \
+  -keyout /etc/nginx/ssl/self.key -out /etc/nginx/ssl/self.crt
+chmod 600 /etc/nginx/ssl/self.key
+
+cat > /etc/nginx/conf.d/reverse-proxy.conf <<'NGINX'
+server {
+  listen 443 ssl default_server;
+  server_name _;
+  server_tokens off;
+
+  ssl_certificate     /etc/nginx/ssl/self.crt;
+  ssl_certificate_key /etc/nginx/ssl/self.key;
+  ssl_protocols       TLSv1.2 TLSv1.3;
+
+  # Target group health check
+  location = /healthstatus {
+    access_log off;
+    default_type text/plain;
+    return 200 "healthy\n";
+  }
+
+  # Re-resolve the internal ALB every 30s: ALB IP addresses change over time,
+  # and a plain proxy_pass hostname is resolved only once at startup.
+  resolver 169.254.169.253 valid=30s;
+  set $internal_alb ${internal_alb_dns};
+
+  location / {
+    proxy_pass https://$internal_alb;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_ssl_server_name on;
+    proxy_ssl_name $host;
+    proxy_read_timeout 60s;
+    client_max_body_size 64m;
+  }
+}
+NGINX
+
+nginx -t
+systemctl enable --now nginx
